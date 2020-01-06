@@ -20,8 +20,7 @@ module Parser = struct
           let () =
             try
               let tree = Eparser.pp_expression Escan.token buffer in
-              let value = (* Preproc.(eval Env.empty tree) *)
-                Preproc.(eval Env.empty tree)
+              let value = Preproc.(eval Env.empty tree)
               in (print_string (string_of_bool value);
                   print_newline ())
             with Lexer diag    -> print "Lexical" diag

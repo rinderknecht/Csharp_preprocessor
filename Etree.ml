@@ -1,5 +1,5 @@
 (* This module defines and exports the type [t] of conditional
-   expressions of C# directives. 
+   expressions of C# directives.
 
    To avoid over-engineering, we moved the definition of the function
    [eval] below into the module [Preproc] itself.

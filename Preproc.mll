@@ -4,6 +4,30 @@
 *)
 
 {
+(* STRING PROCESSING *)
+
+(* The value of [mk_str len p] ("make string") is a string of length
+   [len] containing the [len] characters in the list [p], in reverse
+   order. For instance, [mk_str 3 ['c';'b';'a'] = "abc"]. *)
+
+ let mk_str (len: int) (p: char list) : string =
+  let () = assert (len = List.length p) in
+  let bytes = Bytes.make len ' ' in
+  let rec fill i = function
+         [] -> bytes
+  | char::l -> Bytes.set bytes i char; fill (i-1) l
+  in fill (len-1) p |> Bytes.to_string
+
+(* The call [explode s a] is the list made by pushing the characters
+   in the string [s] on top of [a], in reverse order. For example,
+   [explode "ba" ['c';'d'] = ['a'; 'b'; 'c'; 'd']]. *)
+
+let explode s acc =
+  let rec push = function
+    0 -> acc
+  | i -> s.[i-1] :: push (i-1)
+in push (String.length s)
+
 (* ERROR HANDLING *)
 
 let stop msg seg = raise (Error.Lexer (msg, seg,1))
@@ -13,15 +37,6 @@ exception Local_err of Error.message
 
 let handle_err scan buffer =
   try scan buffer with Local_err msg -> fail msg buffer
-
-(* STRING PROCESSING *)
-
-let mk_str (len:int) (p:char list) : string =
-  let s = Bytes.make len ' ' in
-  let rec fill i =
-    function [] -> s | c::l -> Bytes.set s i c; fill (i-1) l
-in assert (len = List.length p); Bytes.to_string (fill (len-1) p)
-
 
 (* LEXING ENGINE *)
 
@@ -106,13 +121,16 @@ let rec last_mode = function
 
 type offset = Prefix of int | Inline
 
-let expand = function Prefix 0 | Inline -> ()
-                    | Prefix n -> print_string (String.make n ' ')
+let expand = function
+  Prefix 0 | Inline -> ()
+| Prefix n -> print_string (String.make n ' ')
 
 (* Directives *)
 
-let directives = ["if"; "else"; "elif"; "endif"; "define"; "undef";
-                  "error"; "warning"; "line"; "region"; "endregion"]
+let directives = [
+  "if"; "else"; "elif"; "endif"; "define"; "undef";
+  "error"; "warning"; "line"; "region"; "endregion";
+  "include"]
 
 (* Environments and preprocessor expressions
 
@@ -332,7 +350,18 @@ rule scan env mode offset trace = parse
          then fail "Directive invalid inside line." lexbuf
          else let seg = Error.mk_seg lexbuf in
     match id with
-      "if" ->
+      "include" ->
+        let curr_line = Lexing.(lexbuf.lex_curr_p.pos_lnum)
+        and curr_file = Lexing.(lexbuf.lex_curr_p.pos_fname)
+                        |> Filename.basename
+        and incl_file = scan_inclusion lexbuf in
+        let incl_buffer =
+          open_in incl_file |> Lexing.from_channel in
+        Printf.printf "# 1 \"%s\" 1\n" incl_file;
+        cat incl_buffer;
+        Printf.printf "# %i \"%s\" 2\n" (curr_line+1) curr_file;
+        scan env mode offset trace lexbuf
+    | "if" ->
         let mode' = expr env lexbuf in
         let new_mode = if mode = Copy then mode' else Skip in
         let trace' = extend seg (If mode) trace
@@ -494,6 +523,24 @@ and in_block_com = parse
 | eof  { raise (Local_err "Unterminated comment.") }
 | _    { copy lexbuf; in_block_com lexbuf }
 
+(* Include a file *)
+
+and cat = parse
+  eof { () }
+| _   { copy lexbuf; cat lexbuf }
+
+(* Included filename *)
+
+and scan_inclusion = parse
+  blank+ { scan_inclusion lexbuf                         }
+| '"'    { handle_err (in_inclusion [] 0) lexbuf    }
+
+and in_inclusion acc len = parse
+  '"'    { mk_str len acc                           }
+| nl     { fail "Newline invalid in string." lexbuf }
+| eof    { raise (Local_err "Unterminated string.") }
+| _ as c { in_inclusion (c::acc) (len+1) lexbuf     }
+
 (* Strings *)
 
 and in_norm_str = parse
@@ -527,8 +574,11 @@ type filename = string
 let trace (name: filename) : unit =
   match open_in name with
     cin ->
-      let buffer = Lexing.from_channel cin in
-        let open Error
+    let open Lexing in
+    let buffer = from_channel cin in
+    let pos_fname = Filename.basename name in
+    let () = buffer.lex_curr_p <- {buffer.lex_curr_p with pos_fname} in
+    let open Error
       in (try lex buffer with
             Lexer diag    -> print "Lexical" diag
           | Parser diag   -> print "Syntactical" diag
